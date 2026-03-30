@@ -1,0 +1,223 @@
+---
+title: "MULTI-DISEASE SURVEILLANCE ANALYSIS"
+author: "Zephania Mwangi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r}
+pacman::p_load(
+  rio,        
+  skimr,
+  janitor,    
+  epikit,
+  gtsummary,  
+  apyramid, 
+  tidyverse,
+  broom,
+  nnet
+)
+```
+```{r}
+# Import datasets
+data_notif_raw <- import("Data/multidisease_notifications.xlsx")
+data_lab_raw   <- import("Data/multidisease_tests.csv")
+```
+
+```{r}
+# Structure and summary
+glimpse(data_notif_raw)
+glimpse(data_lab_raw)
+
+# Data overview
+skim(data_notif_raw)
+skim(data_lab_raw)
+
+# Missing values
+miss_var_summary(data_notif_raw)
+miss_var_summary(data_lab_raw)
+```
+
+```{r}
+data_notif <- data_notif_raw %>%
+  clean_names() %>%
+  rename(
+    org_unit = organisation_unit_name,
+    facility_code = health_facility_code,
+    dob = date_of_birth,
+    district = residential_district,
+    disease = disease_notified,
+    onset_date = onset_date,
+    report_date = date_reported_by_health_facility_community,
+    outcome_date = date_of_outcome
+  ) %>%
+  mutate(
+    dob = ymd(dob),
+    onset_date = ymd(onset_date),
+    report_date = ymd(report_date),
+    outcome_date = ymd(outcome_date)
+  ) %>%
+  mutate(district = case_match(district,
+                                           c("F Central", "Feveria C", "Feveria Central") ~ "Feveria Central",
+                                           c("Kasara", "Ksr") ~ "Kasara",
+                                           c("L Minara", "Lake Minara", "Lakeside") ~ "Lake Minara"))
+  
+```
+
+```{r}
+data_lab <- data_lab_raw %>%
+  clean_names() %>%
+  mutate(
+    value = case_when(
+      value %in% c("P", "PO1", "PO139") ~ "Positive",
+      value == "N" ~ "Negative",
+      value == "I" ~ "Indeterminate",
+      TRUE ~ value
+    ),
+    date_test = ymd(date_test)
+  )
+```
+```{r}
+# One lab result per case
+data_lab_case <- data_lab %>%
+  group_by(notification_id) %>%
+  arrange(desc(value)) %>%
+  slice(1) %>%
+  ungroup()
+
+# Merge data sets
+data_linked <- left_join(data_notif, data_lab_case, by = "notification_id")
+```
+```{r}
+data_linked <- data_linked %>%
+  mutate(
+    case_category = case_when(
+      value == "Positive" ~ "Confirmed",
+      value == "Negative" ~ "Discarded",
+      TRUE ~ "Suspected"
+    )
+  )
+```
+```{r}
+data_linked <- data_linked %>%
+  mutate(
+    age = as.numeric(difftime(report_date, dob, units = "days")) / 365.25
+  )
+```
+
+```{r}
+data_linked <- data_linked %>%
+  mutate(
+    age_group = case_when(
+      age < 5 ~ "<5",
+      age >= 5 & age < 18 ~ "5-17",
+      age >= 18 & age < 35 ~ "18-34",
+      age >= 35 & age < 50 ~ "35-49",
+      age >= 50 ~ "50+"
+    )
+  )
+```
+```{r}
+data_linked <- data_linked %>%
+  mutate(
+    delay_onset_to_report = as.numeric(report_date - onset_date),
+    delay_report_to_test = as.numeric(date_test - report_date)
+  )
+```
+```{r}
+data_linked %>%
+  tabyl(disease)
+```
+```{r}
+data_linked %>%
+  tabyl(case_category)
+```
+```{r}
+data_linked %>%
+  tabyl(disease, case_category) %>%
+  adorn_percentages("row") %>%
+  adorn_pct_formatting()
+```
+```{r}
+data_linked %>%
+  count(district, sort = TRUE)
+```
+```{r}
+ggplot(data_linked, aes(x = report_date)) +
+  geom_histogram(binwidth = 7) +
+  facet_wrap(~ disease) +
+  labs(
+    title = "Epidemic Curves by Disease",
+    x = "Date",
+    y = "Cases"
+  )
+```
+```{r}
+data_model <- data_linked %>%
+  mutate(
+    case_binary = ifelse(case_category == "Confirmed", 1, 0),
+    sex = as.factor(sex),
+    district = as.factor(district),
+    disease = as.factor(disease),
+    pregnant = as.factor(pregnant),
+    age_group = as.factor(age_group)
+  ) %>%
+  drop_na(case_binary, sex, district, disease, age_group,delay_onset_to_report, age_group, pregnant)
+```
+```{r}
+model_logistic <- glm(
+  case_binary ~ age_group + sex + district + disease + delay_onset_to_report,
+  data = data_model,
+  family = binomial
+)
+
+summary(model_logistic)
+```
+```{r}
+sapply(data_model[, c("age_group","sex","district","disease","pregnant")], function(x) length(unique(x)))
+```
+```{r}
+colSums(is.na(data_model))
+```
+
+
+```{r}
+results_logistic <- tidy(
+  model_logistic,
+  exponentiate = TRUE,
+  conf.int = TRUE
+)
+
+results_logistic
+```
+```{r}
+model_multi <- multinom(
+  disease ~ age_group + sex + district,
+  data = data_model
+)
+
+summary(model_multi)
+```
+```{r}
+exp(coef(model_multi))
+```
+```{r}
+data_model$predicted_prob <- predict(
+  model_logistic,
+  type = "response"
+)
+
+head(data_model$predicted_prob)
+```
+```{r}
+ggplot(data_model, aes(x = predicted_prob)) +
+  geom_histogram(bins = 30) +
+  labs(
+    title = "Predicted Probability of Confirmed Case",
+    x = "Probability",
+    y = "Frequency"
+  )
+```
+```{r}
+miss_var_summary(data_linked)
+```
+
