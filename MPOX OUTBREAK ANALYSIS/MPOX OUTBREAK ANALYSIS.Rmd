@@ -1,0 +1,142 @@
+---
+title: "MPOX OUTBREAK ANALYSIS"
+author: "Zephania Mwangi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r}
+pacman::p_load(
+  rio,        
+  skimr,
+  janitor,    
+  epikit,
+  gtsummary,  
+  apyramid, 
+  tidyverse
+)
+```
+```{r}
+# Load linelist data
+linelist <- read_csv("Data/linelist.csv")
+
+# Load aggregated dataset (if available)
+aggregated <- read_csv("data/aggregated.csv")
+```
+```{r}
+# Clean column names
+linelist <- linelist %>% clean_names()
+
+# View structure
+glimpse(linelist)
+
+# Convert date variables
+linelist <- linelist %>%
+  mutate(
+    date_onset = ymd(date_onset),
+    date_confirmation = ymd(date_confirmation),
+    date_notification = ymd(date_notification)
+  )
+
+# Check missing values
+colSums(is.na(linelist))
+```
+
+Person Analysis
+```{r}
+# Gender distribution
+linelist %>%
+  tabyl(sex)
+
+# Age summary
+summary(linelist$age)
+
+# Age groups
+linelist <- linelist %>%
+  mutate(age_group = case_when(
+    age < 18 ~ "<18",
+    age >= 18 & age < 30 ~ "18-29",
+    age >= 30 & age < 50 ~ "30-49",
+    age >= 50 ~ "50+"
+  ))
+
+linelist %>%
+  tabyl(age_group)
+```
+Place Analysis
+```{r}
+# Cases by country
+cases_country <- linelist %>%
+  count(country, sort = TRUE)
+
+cases_country
+```
+```{r}
+ggplot(cases_country, aes(x = reorder(country, n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Mpox Cases by Country", x = "Country", y = "Cases")
+```
+
+Time Analysis (Epidemic Curve)
+```{r}
+# Cases over time
+epi_curve <- linelist %>%
+  count(date_onset)
+
+# Plot epidemic curve
+ggplot(epi_curve, aes(x = date_onset, y = n)) +
+  geom_col() +
+  labs(title = "Epidemic Curve (Mpox)", x = "Date of Onset", y = "Cases")
+```
+Risk Factor Analysis
+```{r}
+# Cross-tabulation
+tab1 <- table(linelist$sex, linelist$outcome)
+tab1
+
+# Proportions
+prop.table(tab1, margin = 1)
+```
+HIV Status Analysis
+```{r}
+linelist %>%
+  tabyl(hiv_status)
+
+# HIV vs outcome
+tab2 <- table(linelist$hiv_status, linelist$outcome)
+prop.table(tab2, margin = 1)
+```
+
+Symptoms Analysis
+```{r}
+# symptom variable 
+linelist %>%
+  tabyl(symptoms)
+```
+
+SURVEILLANCE & DELAY ANALYSIS
+```{r}
+linelist <- linelist %>%
+  mutate(
+    delay_onset_to_confirm = as.numeric(date_confirmation - date_onset),
+    delay_confirm_to_notify = as.numeric(date_notification - date_confirmation)
+  )
+
+summary(linelist$delay_onset_to_confirm)
+summary(linelist$delay_confirm_to_notify)
+```
+
+```{r}
+ggplot(linelist, aes(x = delay_onset_to_confirm)) +
+  geom_histogram(binwidth = 1) +
+  labs(title = "Delay: Onset to Confirmation", x = "Days", y = "Frequency")
+```
+
+```{r}
+# Percentage missing
+missing <- linelist %>%
+  summarise_all(~mean(is.na(.)) * 100)
+
+missing
+```
+
